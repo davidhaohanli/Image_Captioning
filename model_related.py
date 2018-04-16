@@ -29,17 +29,22 @@ def define_model_last_6_out(vocab_size, max_length,emb_mat):
     fe1 = Flatten()(inputs1)
     return commonLayers(fe1,vocab_size,max_length,inputs1,emb_mat)
 
-def define_model_last_3_out(vocab_size, max_length,emb_mat):
+def define_model_last_3_out(vocab_size, max_length,emb_mat,bn=True,drop=True):
     # feature extractor (encoder)
     inputs1 = Input(shape=(4096,))
-    return commonLayers(inputs1,vocab_size,max_length,inputs1,emb_mat)
+    return commonLayers(inputs1,vocab_size,max_length,inputs1,emb_mat,bn,drop)
     
-def commonLayers(fe1,vocab_size,max_length,inputs1,emb_mat):
+def commonLayers(fe1,vocab_size,max_length,inputs1,emb_mat,bn=True,drop=True):
+    #image encoding
     fe2 = Dense(256)(fe1)
-    fe2 = BatchNormalization()(fe2)
+    if bn:
+        fe2 = BatchNormalization()(fe2)
     fe2 = Activation('relu')(fe2)
-    fe2 = Dropout(0.25)(fe2)
+    if drop:
+        fe2 = Dropout(0.25)(fe2)
     fe3 = RepeatVector(max_length)(fe2)
+    
+    #partial caption encoding
     # embedding
     inputs2 = Input(shape=(max_length,))
     emb2 = Embedding(vocab_size,
@@ -49,18 +54,24 @@ def commonLayers(fe1,vocab_size,max_length,inputs1,emb_mat):
                      mask_zero=True)(inputs2)
     emb3 = GRU(512, return_sequences=True,unroll=True)(emb2)
     emb4 = TimeDistributed(Dense(256))(emb3)
-    emb4 = BatchNormalization()(emb4)
+    if bn:
+        emb4 = BatchNormalization()(emb4)
     emb4 = Activation('relu')(emb4)
-    emb4 = Dropout(0.25)(emb4)
+    if drop:
+        emb4 = Dropout(0.25)(emb4)
+    
+    # language model (decoder)
     # merge inputs
     merged = concatenate([fe3, emb4])
-    # language model (decoder)
-    lm2 = GRU(512,unroll=True,return_sequences=True)(merged)
-    lm2 = GRU(512,unroll=True)(lm2)
-    lm3 = Dense(512)(lm2)
-    lm3 = BatchNormalization()(lm3)
+    if bn and drop:
+        merged = GRU(512,unroll=True,return_sequences=True)(merged)
+    merged = GRU(512,unroll=True)(merged)
+    lm3 = Dense(512)(merged)
+    if bn:
+        lm3 = BatchNormalization()(lm3)
     lm3 = Activation('relu')(lm3)
-    lm3 = Dropout(0.25)(lm3)
+    if drop:
+        lm3 = Dropout(0.25)(lm3)
     outputs = Dense(vocab_size, activation='softmax')(lm3)
     # tie it together [image, seq] [word]
     model = Model(inputs=[inputs1, inputs2], outputs=outputs)
@@ -145,12 +156,13 @@ def show_curve_train(history):
     plt.show()
 
 class WeightsSaver(Callback):
-    def __init__(self, model,name):
+    def __init__(self, model,name,step=1):
         self.model = model
         self.name = name
         self.epoch = 0
+        self.step = step
         
     def on_epoch_end(self, epoch, logs={}):
-        #if self.epoch%5 == 0 or self.epoch == 199:
-        self.model.save_weights(self.name+'Epoch'+str(self.epoch)+'.h5')
+        if self.epoch%self.step == 0 or self.epoch == 199:
+            self.model.save_weights(self.name+'Epoch'+str(self.epoch)+'.h5')
         self.epoch+=1
